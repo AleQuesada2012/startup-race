@@ -1,12 +1,74 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
+import type { RoomApi, RoomState } from './lib/roomApi'
 
-describe('inicio de Startup Race', () => {
-  it('presenta las entradas públicas para crear o unirse a un Room', () => {
-    render(<App />)
+const waitingRoom: RoomState = {
+  room: {
+    id: 'room-1',
+    code: 'ABC234',
+    host_id: 'identity-1',
+    status: 'waiting',
+    phase: null,
+    current_player_id: null,
+    round: 1,
+    version: 1,
+    pending_kind: null,
+    pending_card_id: null,
+    deadline: null,
+    result: null,
+    expires_at: '2026-09-23T12:00:00Z',
+  },
+  players: [
+    {
+      id: 'player-1',
+      name: 'Ana',
+      entrepreneurship_type: 'technology',
+      turn_order: null,
+      position: 0,
+      capital: 5000,
+      reputation: 1,
+      innovation: 2,
+      is_host: true,
+      is_self: true,
+    },
+    {
+      id: 'player-2',
+      name: 'Luis',
+      entrepreneurship_type: 'social',
+      turn_order: null,
+      position: 0,
+      capital: 5000,
+      reputation: 2,
+      innovation: 1,
+      is_host: false,
+      is_self: false,
+    },
+  ],
+}
 
+function roomApi(overrides: Partial<RoomApi> = {}): RoomApi {
+  return {
+    ensureIdentity: vi.fn().mockResolvedValue(undefined),
+    createRoom: vi.fn().mockResolvedValue(waitingRoom),
+    joinRoom: vi.fn().mockResolvedValue(waitingRoom),
+    getRoomState: vi.fn().mockRejectedValue(new Error('not_room_member')),
+    startGame: vi.fn().mockResolvedValue({
+      ...waitingRoom,
+      room: { ...waitingRoom.room, status: 'playing', version: 2 },
+    }),
+    ...overrides,
+  }
+}
+
+describe('lobby de Startup Race', () => {
+  afterEach(cleanup)
+  beforeEach(() => window.history.replaceState({}, '', '/'))
+
+  it('presenta las entradas públicas para crear o unirse a una Sala', () => {
+    render(<App api={roomApi()} />)
     expect(
       screen.getByRole('heading', { level: 1, name: 'Startup Race' }),
     ).toBeInTheDocument()
@@ -14,5 +76,149 @@ describe('inicio de Startup Race', () => {
     expect(
       screen.getByRole('button', { name: 'Unirme con un código' }),
     ).toBeEnabled()
+  })
+
+  it('crea una Sala, muestra sus Jugadores y permite iniciar al host', async () => {
+    const user = userEvent.setup()
+    const api = roomApi()
+    render(<App api={api} />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.selectOptions(
+      screen.getByLabelText('Tipo de emprendimiento'),
+      'technology',
+    )
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Ana')).toBeInTheDocument()
+    expect(screen.getByText('Luis')).toBeInTheDocument()
+    expect(api.createRoom).toHaveBeenCalledWith(
+      'Ana',
+      'technology',
+      expect.any(String),
+    )
+    await user.click(screen.getByRole('button', { name: 'Iniciar partida' }))
+    expect(api.startGame).toHaveBeenCalledWith('room-1', 1, expect.any(String))
+    expect(
+      await screen.findByRole('heading', { name: 'Partida iniciada' }),
+    ).toBeInTheDocument()
+  })
+
+  it('restaura el asiento de la misma identidad desde el código en la URL', async () => {
+    window.history.replaceState({}, '', '/?room=abc234')
+    const api = roomApi({
+      getRoomState: vi.fn().mockResolvedValue(waitingRoom),
+    })
+    render(<App api={api} />)
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(api.getRoomState).toHaveBeenCalledWith('ABC234')
+  })
+
+  it('anuncia en español los errores al unirse', async () => {
+    const user = userEvent.setup()
+    const api = roomApi({
+      joinRoom: vi.fn().mockRejectedValue(new Error('player_name_taken')),
+    })
+    render(<App api={api} />)
+    await user.click(
+      screen.getByRole('button', { name: 'Unirme con un código' }),
+    )
+    await user.type(screen.getByLabelText('Código de sala'), 'ABC234')
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Unirme a la sala' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Ese nombre ya está en uso en esta sala.',
+    )
+  })
+
+  it('permite unirse desde el código compartido cuando la identidad aún no ocupa un asiento', async () => {
+    window.history.replaceState({}, '', '/?room=abc234')
+    const user = userEvent.setup()
+    const api = roomApi()
+    render(<App api={api} />)
+    expect(await screen.findByLabelText('Código de sala')).toHaveValue('ABC234')
+    await user.type(screen.getByLabelText('Tu nombre'), 'Bea')
+    await user.selectOptions(
+      screen.getByLabelText('Tipo de emprendimiento'),
+      'social',
+    )
+    await user.click(screen.getByRole('button', { name: 'Unirme a la sala' }))
+    expect(api.joinRoom).toHaveBeenCalledWith(
+      'ABC234',
+      'Bea',
+      'social',
+      expect.any(String),
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+  })
+
+  it('no ofrece iniciar la Partida a un Jugador que no es anfitrión', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const guestRoom: RoomState = {
+      ...waitingRoom,
+      players: waitingRoom.players.map((player) => ({
+        ...player,
+        is_self: player.id === 'player-2',
+      })),
+    }
+    const api = roomApi({ getRoomState: vi.fn().mockResolvedValue(guestRoom) })
+    render(<App api={api} />)
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Iniciar partida' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText('Esperando a que el anfitrión inicie la partida.'),
+    ).toBeInTheDocument()
+  })
+
+  it('desactiva iniciar hasta que haya dos Jugadores', async () => {
+    const user = userEvent.setup()
+    const api = roomApi({
+      createRoom: vi.fn().mockResolvedValue({
+        ...waitingRoom,
+        players: waitingRoom.players.slice(0, 1),
+      }),
+    })
+    render(<App api={api} />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(
+      await screen.findByRole('button', { name: 'Iniciar partida' }),
+    ).toBeDisabled()
+  })
+
+  it('actualiza la Sala visible al recuperar el foco sin perder versiones nuevas', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const newerRoom: RoomState = {
+      ...waitingRoom,
+      room: { ...waitingRoom.room, version: 2 },
+      players: [
+        ...waitingRoom.players,
+        { ...waitingRoom.players[1], id: 'player-3', name: 'Bea' },
+      ],
+    }
+    const getRoomState = vi
+      .fn()
+      .mockResolvedValueOnce(waitingRoom)
+      .mockResolvedValueOnce(newerRoom)
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ getRoomState })} />)
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByText('Bea')).toBeInTheDocument()
+    window.dispatchEvent(new Event('focus'))
+    expect(screen.getByText('Bea')).toBeInTheDocument()
   })
 })
