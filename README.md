@@ -38,14 +38,15 @@ pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test:run
+pnpm test:db
 pnpm build
 pnpm test:e2e
 pnpm check
 ```
 
 `pnpm check` is the fast frontend gate. CI runs the same checks and then adds the
-Chromium end-to-end suite. Database tests require the local Supabase stack and
-are added beside the migrations they verify.
+Chromium end-to-end suite. `pnpm test:db` runs the pgTAP suite against the local
+Supabase stack.
 
 ## Deployment
 

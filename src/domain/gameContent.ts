@@ -1,4 +1,4 @@
-import { cards } from './cards'
+import { cards } from './cards.ts'
 import {
   cardIdSchema,
   cardCategories,
@@ -10,7 +10,7 @@ import {
   type CardId,
   type GameContent,
   type ManagementAction,
-} from './contentTypes'
+} from './contentTypes.ts'
 
 const cardPositions: Record<CardCategory, readonly number[]> = {
   decision: [1, 5, 9, 13, 17, 21, 25, 29],
