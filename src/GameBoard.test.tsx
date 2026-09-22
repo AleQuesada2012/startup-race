@@ -63,7 +63,10 @@ function gameApi(state: RoomState = playingRoom): RoomApi {
 }
 
 describe('Partida de Startup Race', () => {
-  beforeEach(() => window.history.replaceState({}, '', '/?room=ABC234'))
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    window.localStorage.clear()
+  })
   afterEach(cleanup)
 
   it('muestra el tablero, los recursos y el Turno actual', async () => {
@@ -87,9 +90,58 @@ describe('Partida de Startup Race', () => {
     const roll = await screen.findByRole('button', { name: 'Lanzar dado' })
     await user.tab()
     await user.tab()
+    await user.tab()
     expect(roll).toHaveFocus()
     await user.keyboard('{Enter}')
     expect(api.rollDice).toHaveBeenCalledWith('room-1', 3, expect.any(String))
+  })
+
+  it('conserva el ID de solicitud al reintentar un lanzamiento sin respuesta', async () => {
+    const user = userEvent.setup()
+    const api = gameApi()
+    const next: RoomState = {
+      ...playingRoom,
+      room: {
+        ...playingRoom.room,
+        version: 4,
+        phase: 'waiting_for_choice',
+        pending_kind: 'card',
+        pending_card_id: 'decision-partner',
+      },
+    }
+    const rollDice = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(next)
+    api.rollDice = rollDice
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: 'Lanzar dado' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Reconectando')
+    await user.click(screen.getByRole('button', { name: 'Lanzar dado' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Socio estratégico' }),
+    ).toBeInTheDocument()
+    expect(rollDice.mock.calls[1][2]).toBe(rollDice.mock.calls[0][2])
+  })
+
+  it('consulta la Sala inmediatamente después de un comando', async () => {
+    const user = userEvent.setup()
+    const next: RoomState = {
+      ...playingRoom,
+      room: {
+        ...playingRoom.room,
+        version: 4,
+        result: { kind: 'roll', roll: 4 },
+      },
+    }
+    const api = gameApi()
+    api.rollDice = vi.fn().mockResolvedValue(next)
+    const getRoomState = vi.fn().mockResolvedValue(playingRoom)
+    api.getRoomState = getRoomState
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: 'Lanzar dado' }))
+    expect(await screen.findByText('Dado: 4')).toBeInTheDocument()
+    expect(getRoomState).toHaveBeenCalledTimes(2)
   })
 
   it('lanza el dado mediante la Sala y muestra la Tarjeta recibida', async () => {
@@ -432,5 +484,94 @@ describe('Partida de Startup Race', () => {
     expect(
       screen.getByRole('list', { name: 'Clasificación final' }),
     ).toHaveTextContent('1.º Luis')
+  })
+
+  it('reproduce señales de dado, decisión y victoria solo después de activar sonidos', async () => {
+    const starts = vi.fn()
+    class FakeAudioContext {
+      currentTime = 0
+      destination = {}
+      resume = vi.fn().mockResolvedValue(undefined)
+      createOscillator() {
+        return {
+          type: 'sine',
+          frequency: { setValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          start: starts,
+          stop: vi.fn(),
+        }
+      }
+      createGain() {
+        return {
+          gain: {
+            setValueAtTime: vi.fn(),
+            exponentialRampToValueAtTime: vi.fn(),
+          },
+          connect: vi.fn(),
+        }
+      }
+    }
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    try {
+      const user = userEvent.setup()
+      const rolled: RoomState = {
+        ...playingRoom,
+        room: {
+          ...playingRoom.room,
+          version: 4,
+          result: { kind: 'roll', roll: 4 },
+        },
+      }
+      const decided: RoomState = {
+        ...rolled,
+        room: {
+          ...rolled.room,
+          version: 5,
+          result: { kind: 'card', outcome_label: 'Piloto aceptado' },
+        },
+      }
+      const won: RoomState = {
+        ...decided,
+        room: {
+          ...decided.room,
+          version: 6,
+          status: 'finished',
+          phase: null,
+          current_player_id: null,
+          deadline: null,
+          result: {
+            kind: 'match_finished',
+            reason: 'consolidation',
+            winner_player_id: 'player-1',
+            rankings: [],
+          },
+        },
+      }
+      const api = gameApi()
+      api.rollDice = vi.fn().mockResolvedValue(rolled)
+      api.getRoomState = vi
+        .fn()
+        .mockResolvedValueOnce(playingRoom)
+        .mockResolvedValueOnce(rolled)
+        .mockResolvedValueOnce(decided)
+        .mockResolvedValue(won)
+      render(<App api={api} />)
+      await user.click(
+        await screen.findByRole('button', { name: 'Activar sonidos' }),
+      )
+      await user.click(screen.getByRole('button', { name: 'Lanzar dado' }))
+      expect(starts).toHaveBeenCalledTimes(2)
+      await act(async () => window.dispatchEvent(new Event('focus')))
+      expect(starts).toHaveBeenCalledTimes(4)
+      await act(async () => window.dispatchEvent(new Event('focus')))
+      expect(starts).toHaveBeenCalledTimes(7)
+      await user.click(
+        screen.getByRole('button', { name: 'Silenciar sonidos' }),
+      )
+      await act(async () => window.dispatchEvent(new Event('focus')))
+      expect(starts).toHaveBeenCalledTimes(7)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

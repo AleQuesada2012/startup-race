@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { playCue, prepareAudio } from './audioCues'
 import type { EntrepreneurshipType, RoomApi, RoomState } from './roomApi'
 
 function errorMessage(error: unknown): string {
@@ -49,6 +50,21 @@ function roomCodeFromUrl(): string {
   )
 }
 
+function isNetworkFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /fetch|network|timeout|connection/i.test(error.message)
+  )
+}
+
+function storedSoundPreference(): boolean {
+  try {
+    return window.localStorage.getItem('startup-race:sound') === 'on'
+  } catch {
+    return false
+  }
+}
+
 export function useRoomLobby(api: RoomApi) {
   const [mode, setMode] = useState<'home' | 'create' | 'join'>(() =>
     roomCodeFromUrl() ? 'join' : 'home',
@@ -59,10 +75,74 @@ export function useRoomLobby(api: RoomApi) {
   const [roomState, setRoomState] = useState<RoomState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [connectionStatus, setConnectionStatus] = useState<
+    'connected' | 'reconnecting' | 'restored'
+  >('connected')
+  const [soundEnabled, setSoundEnabled] = useState(storedSoundPreference)
+  const soundEnabledRef = useRef(soundEnabled)
   const currentVersion = useRef(-1)
+  const readInFlight = useRef<Promise<RoomState> | null>(null)
+  const pendingRequest = useRef<{ key: string; id: string } | null>(null)
+
+  function requestIdFor(key: string): string {
+    if (pendingRequest.current?.key === key) return pendingRequest.current.id
+    const id = crypto.randomUUID()
+    pendingRequest.current = { key, id }
+    return id
+  }
+
+  function clearRequest(key: string) {
+    if (pendingRequest.current?.key === key) pendingRequest.current = null
+  }
+
+  function markConnected() {
+    setConnectionStatus((previous) =>
+      previous === 'reconnecting' ? 'restored' : previous,
+    )
+  }
+
+  const readRoom = useCallback(
+    async (roomCode: string): Promise<RoomState> => {
+      while (readInFlight.current) {
+        try {
+          await readInFlight.current
+        } catch {
+          /* A later read can retry. */
+        }
+      }
+      const pending = api.getRoomState(roomCode)
+      readInFlight.current = pending
+      try {
+        return await pending
+      } finally {
+        if (readInFlight.current === pending) readInFlight.current = null
+      }
+    },
+    [api],
+  )
+
+  async function refreshAfterCommand(next: RoomState) {
+    try {
+      const latest = await readRoom(next.room.code)
+      showRoom(latest)
+      markConnected()
+    } catch (cause) {
+      if (isNetworkFailure(cause)) setConnectionStatus('reconnecting')
+    }
+  }
+
+  useEffect(() => {
+    if (connectionStatus !== 'restored') return
+    const timer = window.setTimeout(
+      () => setConnectionStatus('connected'),
+      4000,
+    )
+    return () => window.clearTimeout(timer)
+  }, [connectionStatus])
 
   function showRoom(next: RoomState) {
     if (next.room.version <= currentVersion.current) return
+    const hadPreviousState = currentVersion.current >= 0
     currentVersion.current = next.room.version
     setRoomState(next)
     setCode(next.room.code)
@@ -71,6 +151,29 @@ export function useRoomLobby(api: RoomApi) {
       '',
       `/?room=${encodeURIComponent(next.room.code)}`,
     )
+    if (
+      hadPreviousState &&
+      soundEnabledRef.current &&
+      next.room.result &&
+      typeof next.room.result === 'object'
+    ) {
+      const kind = (next.room.result as Record<string, unknown>).kind
+      if (kind === 'roll') playCue('roll')
+      else if (kind === 'card' || kind === 'management') playCue('decision')
+      else if (kind === 'match_finished') playCue('win')
+    }
+  }
+
+  function toggleSound() {
+    const next = !soundEnabledRef.current
+    soundEnabledRef.current = next
+    setSoundEnabled(next)
+    try {
+      window.localStorage.setItem('startup-race:sound', next ? 'on' : 'off')
+    } catch {
+      /* Keep the in-memory preference. */
+    }
+    if (next) prepareAudio()
   }
 
   useEffect(() => {
@@ -80,10 +183,14 @@ export function useRoomLobby(api: RoomApi) {
     void (async () => {
       try {
         await api.ensureIdentity()
-        const restored = await api.getRoomState(initialCode)
-        if (!cancelled) showRoom(restored)
+        const restored = await readRoom(initialCode)
+        if (!cancelled) {
+          showRoom(restored)
+          markConnected()
+        }
       } catch (cause) {
         if (cancelled) return
+        if (isNetworkFailure(cause)) setConnectionStatus('reconnecting')
         if (
           cause instanceof Error &&
           cause.message.includes('not_room_member')
@@ -98,7 +205,7 @@ export function useRoomLobby(api: RoomApi) {
     return () => {
       cancelled = true
     }
-  }, [api])
+  }, [api, readRoom])
 
   useEffect(() => {
     if (!roomState) return
@@ -114,9 +221,10 @@ export function useRoomLobby(api: RoomApi) {
       clearTimeout(timer)
       inFlight = true
       try {
-        const latest = await api.getRoomState(roomCode)
+        const latest = await readRoom(roomCode)
         if (!cancelled) {
           showRoom(latest)
+          markConnected()
           if (
             latest.room.status === 'playing' &&
             latest.room.deadline &&
@@ -130,7 +238,10 @@ export function useRoomLobby(api: RoomApi) {
                 latest.room.version,
                 crypto.randomUUID(),
               )
-              if (!cancelled) showRoom(resolved)
+              if (!cancelled) {
+                showRoom(resolved)
+                void refreshAfterCommand(resolved)
+              }
             } catch (cause) {
               if (!(
                 cause instanceof Error &&
@@ -144,6 +255,7 @@ export function useRoomLobby(api: RoomApi) {
         }
       } catch {
         retryDelay = Math.min(retryDelay * 2, 30000)
+        if (!cancelled) setConnectionStatus('reconnecting')
       } finally {
         inFlight = false
         if (!cancelled) timer = setTimeout(refresh, retryDelay)
@@ -164,7 +276,7 @@ export function useRoomLobby(api: RoomApi) {
     }
     // Restart when the Sala changes status or code, not on each version update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, roomState?.room.code, roomState?.room.status])
+  }, [api, readRoom, roomState?.room.code, roomState?.room.status])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -181,58 +293,70 @@ export function useRoomLobby(api: RoomApi) {
       return
     }
     setBusy(true)
+    const requestKey = `${mode}:${normalizedCode}:${normalizedName}:${type}`
     try {
       await api.ensureIdentity()
-      const requestId = crypto.randomUUID()
+      const requestId = requestIdFor(requestKey)
       const next =
         mode === 'create'
           ? await api.createRoom(normalizedName, type, requestId)
           : await api.joinRoom(normalizedCode, normalizedName, type, requestId)
       showRoom(next)
+      void refreshAfterCommand(next)
       setError('')
+      clearRequest(requestKey)
+      markConnected()
     } catch (cause) {
       setError(errorMessage(cause))
+      if (isNetworkFailure(cause)) setConnectionStatus('reconnecting')
     } finally {
       setBusy(false)
     }
   }
 
   async function runRoomCommand(
+    commandKey: string,
     command: (state: RoomState, requestId: string) => Promise<RoomState>,
   ) {
     if (!roomState || busy) return
+    if (soundEnabledRef.current) prepareAudio()
     setBusy(true)
     setError('')
     try {
-      const next = await command(roomState, crypto.randomUUID())
+      const requestKey = `${roomState.room.id}:${roomState.room.version}:${commandKey}`
+      const next = await command(roomState, requestIdFor(requestKey))
       showRoom(next)
+      void refreshAfterCommand(next)
+      clearRequest(requestKey)
+      markConnected()
     } catch (cause) {
       setError(errorMessage(cause))
+      if (isNetworkFailure(cause)) setConnectionStatus('reconnecting')
     } finally {
       setBusy(false)
     }
   }
 
   function startGame() {
-    return runRoomCommand((state, requestId) =>
+    return runRoomCommand('start_game', (state, requestId) =>
       api.startGame(state.room.id, state.room.version, requestId),
     )
   }
 
   function rollDice() {
-    return runRoomCommand((state, requestId) =>
+    return runRoomCommand('roll_dice', (state, requestId) =>
       api.rollDice(state.room.id, state.room.version, requestId),
     )
   }
 
   function chooseOption(optionId: string) {
-    return runRoomCommand((state, requestId) =>
+    return runRoomCommand(`choose_option:${optionId}`, (state, requestId) =>
       api.chooseOption(state.room.id, optionId, state.room.version, requestId),
     )
   }
 
   function resolveTimeout() {
-    return runRoomCommand((state, requestId) =>
+    return runRoomCommand('resolve_timeout', (state, requestId) =>
       api.resolveTimeout(state.room.id, state.room.version, requestId),
     )
   }
@@ -253,6 +377,9 @@ export function useRoomLobby(api: RoomApi) {
     roomState,
     busy,
     error,
+    connectionStatus,
+    soundEnabled,
+    toggleSound,
     setError,
     submit,
     startGame,
