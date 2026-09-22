@@ -23,6 +23,16 @@ function errorMessage(error: unknown): string {
     return 'La sala cambió. Actualiza e inténtalo de nuevo.'
   if (detail.includes('room_not_startable'))
     return 'Esta sala ya no se puede iniciar.'
+  if (detail.includes('not_your_turn'))
+    return 'Espera tu Turno para realizar esta acción.'
+  if (detail.includes('insufficient_resources'))
+    return 'No tienes recursos suficientes para esta Opción.'
+  if (detail.includes('deadline_expired'))
+    return 'El tiempo de este Turno terminó.'
+  if (detail.includes('deadline_not_reached'))
+    return 'El tiempo de este Turno aún no termina.'
+  if (detail.includes('invalid_turn_phase'))
+    return 'La fase del Turno cambió. Actualiza la Sala.'
   if (detail.includes('invalid_player_name'))
     return 'Escribe un nombre de 1 a 24 caracteres.'
   if (detail.includes('configuration_unavailable'))
@@ -182,6 +192,61 @@ export function useRoomLobby(api: RoomApi) {
     }
   }
 
+  async function rollDice() {
+    if (!roomState || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.rollDice(
+        roomState.room.id,
+        roomState.room.version,
+        crypto.randomUUID(),
+      )
+      showRoom(next)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function chooseOption(optionId: string) {
+    if (!roomState || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.chooseOption(
+        roomState.room.id,
+        optionId,
+        roomState.room.version,
+        crypto.randomUUID(),
+      )
+      showRoom(next)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resolveTimeout() {
+    if (!roomState || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.resolveTimeout(
+        roomState.room.id,
+        roomState.room.version,
+        crypto.randomUUID(),
+      )
+      showRoom(next)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const selfIsHost =
     roomState?.players.some((player) => player.is_self && player.is_host) ??
     false
@@ -201,6 +266,9 @@ export function useRoomLobby(api: RoomApi) {
     setError,
     submit,
     startGame,
+    rollDice,
+    chooseOption,
+    resolveTimeout,
     selfIsHost,
   }
 }

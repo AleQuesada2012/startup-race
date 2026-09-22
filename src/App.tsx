@@ -1,4 +1,5 @@
 import './App.css'
+import GameBoard from './GameBoard'
 import {
   getDefaultRoomApi,
   type EntrepreneurshipType,
@@ -36,6 +37,9 @@ function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
     setError,
     submit,
     startGame,
+    rollDice,
+    chooseOption,
+    resolveTimeout,
     selfIsHost,
   } = useRoomLobby(api)
   return (
@@ -47,7 +51,16 @@ function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
         <span className="status-badge">MVP académico</span>
       </header>
 
-      {roomState ? (
+      {roomState && roomState.room.status !== 'waiting' ? (
+        <GameBoard
+          state={roomState}
+          busy={busy}
+          error={error}
+          onRoll={rollDice}
+          onChoose={chooseOption}
+          onTimeout={resolveTimeout}
+        />
+      ) : roomState ? (
         <section className="lobby" aria-labelledby="room-title">
           <p className="eyebrow">
             {roomState.room.status === 'waiting'

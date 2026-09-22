@@ -50,6 +50,22 @@ export interface RoomApi {
     expectedVersion: number,
     requestId: string,
   ): Promise<RoomState>
+  rollDice(
+    roomId: string,
+    expectedVersion: number,
+    requestId: string,
+  ): Promise<RoomState>
+  chooseOption(
+    roomId: string,
+    optionId: string,
+    expectedVersion: number,
+    requestId: string,
+  ): Promise<RoomState>
+  resolveTimeout(
+    roomId: string,
+    expectedVersion: number,
+    requestId: string,
+  ): Promise<RoomState>
 }
 
 function unwrap<T>(data: T | null, error: { message: string } | null): T {
@@ -97,6 +113,31 @@ function createRoomApi(client: SupabaseClient): RoomApi {
       })
       return unwrap(data as RoomState | null, error)
     },
+    async rollDice(roomId, expectedVersion, requestId) {
+      const { data, error } = await client.rpc('roll_dice', {
+        room_id: roomId,
+        expected_version: expectedVersion,
+        request_id: requestId,
+      })
+      return unwrap(data as RoomState | null, error)
+    },
+    async chooseOption(roomId, optionId, expectedVersion, requestId) {
+      const { data, error } = await client.rpc('choose_option', {
+        room_id: roomId,
+        option_id: optionId,
+        expected_version: expectedVersion,
+        request_id: requestId,
+      })
+      return unwrap(data as RoomState | null, error)
+    },
+    async resolveTimeout(roomId, expectedVersion, requestId) {
+      const { data, error } = await client.rpc('resolve_timeout', {
+        room_id: roomId,
+        expected_version: expectedVersion,
+        request_id: requestId,
+      })
+      return unwrap(data as RoomState | null, error)
+    },
   }
 }
 
@@ -115,6 +156,9 @@ export function getDefaultRoomApi(): RoomApi {
       joinRoom: unavailable,
       getRoomState: unavailable,
       startGame: unavailable,
+      rollDice: unavailable,
+      chooseOption: unavailable,
+      resolveTimeout: unavailable,
     }
     return defaultApi
   }
