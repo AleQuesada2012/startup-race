@@ -7,7 +7,7 @@ import {
   type CardOption,
   type Outcome,
   type ResourceVector,
-} from './contentTypes'
+} from './contentTypes.ts'
 
 const resources = (
   capital = 0,
