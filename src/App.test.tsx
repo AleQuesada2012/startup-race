@@ -340,6 +340,52 @@ describe('lobby de Startup Race', () => {
     expect(await screen.findByText('Conexión restablecida')).toBeInTheDocument()
   })
 
+  it('recupera una Sala compartida después de un fallo de red inicial', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    vi.useFakeTimers()
+    try {
+      const getRoomState = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Failed to fetch'))
+        .mockResolvedValue(waitingRoom)
+      const view = render(<App api={roomApi({ getRoomState })} />)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('Reconectando')
+      expect(getRoomState).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(getRoomState).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(
+        screen.getByRole('heading', { name: 'Sala ABC234' }),
+      ).toBeInTheDocument()
+      expect(screen.getByText('Conexión restablecida')).toBeInTheDocument()
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reintenta cargar la Sala compartida al recuperar el foco', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const getRoomState = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ getRoomState })} />)
+    expect(await screen.findByRole('status')).toHaveTextContent('Reconectando')
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(getRoomState).toHaveBeenCalledTimes(2)
+  })
+
   it('no solapa consultas de la Sala al recibir focos repetidos', async () => {
     window.history.replaceState({}, '', '/?room=ABC234')
     let finishRefresh!: (state: RoomState) => void

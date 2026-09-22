@@ -146,30 +146,64 @@ export function useRoomLobby(api: RoomApi) {
     const initialCode = roomCodeFromUrl()
     if (!initialCode) return
     let cancelled = false
-    void (async () => {
+    let done = false
+    let inFlight = false
+    let retryDelay = 2000
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    async function restore() {
+      if (
+        cancelled ||
+        done ||
+        inFlight ||
+        document.visibilityState === 'hidden'
+      )
+        return
+      clearTimeout(timer)
+      inFlight = true
       try {
         await api.ensureIdentity()
         const restored = await readRoom(initialCode)
         if (!cancelled) {
+          done = true
           showRoom(restored)
           markConnected()
+          setError('')
         }
       } catch (cause) {
         if (cancelled) return
-        if (isNetworkFailure(cause)) setConnectionStatus('reconnecting')
-        if (
+        if (isNetworkFailure(cause)) {
+          setConnectionStatus('reconnecting')
+          setError('')
+          retryDelay = Math.min(retryDelay * 2, 30000)
+          timer = setTimeout(() => void restore(), retryDelay)
+        } else if (
           cause instanceof Error &&
           cause.message.includes('not_room_member')
         ) {
+          done = true
           setMode('join')
           setError('')
         } else {
+          done = true
           setError(errorMessage(cause))
         }
+      } finally {
+        inFlight = false
       }
-    })()
+    }
+
+    function onFocus() {
+      void restore()
+    }
+    void restore()
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
     return () => {
       cancelled = true
+      clearTimeout(timer)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
     }
   }, [api, readRoom, showRoom])
 
