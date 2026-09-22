@@ -23,6 +23,16 @@ function errorMessage(error: unknown): string {
     return 'La sala cambió. Actualiza e inténtalo de nuevo.'
   if (detail.includes('room_not_startable'))
     return 'Esta sala ya no se puede iniciar.'
+  if (detail.includes('not_your_turn'))
+    return 'Espera tu Turno para realizar esta acción.'
+  if (detail.includes('insufficient_resources'))
+    return 'No tienes recursos suficientes para esta Opción.'
+  if (detail.includes('deadline_expired'))
+    return 'El tiempo de este Turno terminó.'
+  if (detail.includes('deadline_not_reached'))
+    return 'El tiempo de este Turno aún no termina.'
+  if (detail.includes('invalid_turn_phase'))
+    return 'La fase del Turno cambió. Actualiza la Sala.'
   if (detail.includes('invalid_player_name'))
     return 'Escribe un nombre de 1 a 24 caracteres.'
   if (detail.includes('configuration_unavailable'))
@@ -95,6 +105,7 @@ export function useRoomLobby(api: RoomApi) {
     let cancelled = false
     let inFlight = false
     let retryDelay = 2000
+    let lastTimeoutAttempt = -1
     let timer: ReturnType<typeof setTimeout> | undefined
     const roomCode = roomState.room.code
 
@@ -106,6 +117,29 @@ export function useRoomLobby(api: RoomApi) {
         const latest = await api.getRoomState(roomCode)
         if (!cancelled) {
           showRoom(latest)
+          if (
+            latest.room.status === 'playing' &&
+            latest.room.deadline &&
+            Date.parse(latest.room.deadline) <= Date.now() &&
+            latest.room.version !== lastTimeoutAttempt
+          ) {
+            lastTimeoutAttempt = latest.room.version
+            try {
+              const resolved = await api.resolveTimeout(
+                latest.room.id,
+                latest.room.version,
+                crypto.randomUUID(),
+              )
+              if (!cancelled) showRoom(resolved)
+            } catch (cause) {
+              if (!(
+                cause instanceof Error &&
+                cause.message.includes('stale_version')
+              )) {
+                lastTimeoutAttempt = -1
+              }
+            }
+          }
           retryDelay = 2000
         }
       } catch {
@@ -163,23 +197,44 @@ export function useRoomLobby(api: RoomApi) {
     }
   }
 
-  async function startGame() {
+  async function runRoomCommand(
+    command: (state: RoomState, requestId: string) => Promise<RoomState>,
+  ) {
     if (!roomState || busy) return
     setBusy(true)
     setError('')
     try {
-      const next = await api.startGame(
-        roomState.room.id,
-        roomState.room.version,
-        crypto.randomUUID(),
-      )
+      const next = await command(roomState, crypto.randomUUID())
       showRoom(next)
-      setError('')
     } catch (cause) {
       setError(errorMessage(cause))
     } finally {
       setBusy(false)
     }
+  }
+
+  function startGame() {
+    return runRoomCommand((state, requestId) =>
+      api.startGame(state.room.id, state.room.version, requestId),
+    )
+  }
+
+  function rollDice() {
+    return runRoomCommand((state, requestId) =>
+      api.rollDice(state.room.id, state.room.version, requestId),
+    )
+  }
+
+  function chooseOption(optionId: string) {
+    return runRoomCommand((state, requestId) =>
+      api.chooseOption(state.room.id, optionId, state.room.version, requestId),
+    )
+  }
+
+  function resolveTimeout() {
+    return runRoomCommand((state, requestId) =>
+      api.resolveTimeout(state.room.id, state.room.version, requestId),
+    )
   }
 
   const selfIsHost =
@@ -201,6 +256,9 @@ export function useRoomLobby(api: RoomApi) {
     setError,
     submit,
     startGame,
+    rollDice,
+    chooseOption,
+    resolveTimeout,
     selfIsHost,
   }
 }

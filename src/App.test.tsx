@@ -59,6 +59,9 @@ function roomApi(overrides: Partial<RoomApi> = {}): RoomApi {
       ...waitingRoom,
       room: { ...waitingRoom.room, status: 'playing', version: 2 },
     }),
+    rollDice: vi.fn().mockResolvedValue(waitingRoom),
+    chooseOption: vi.fn().mockResolvedValue(waitingRoom),
+    resolveTimeout: vi.fn().mockResolvedValue(waitingRoom),
     ...overrides,
   }
 }
@@ -271,6 +274,6 @@ describe('lobby de Startup Race', () => {
       await screen.findByRole('heading', { name: 'Partida iniciada' }),
     ).toBeInTheDocument()
     window.dispatchEvent(new Event('focus'))
-    expect(await screen.findByText('Ronda 2')).toBeInTheDocument()
+    expect(await screen.findByText('Ronda 2 de 12')).toBeInTheDocument()
   })
 })
