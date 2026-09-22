@@ -529,6 +529,18 @@ h1 {
   .match-layout {
     grid-template-columns: 1fr;
   }
+  .match-side {
+    order: -1;
+  }
+  .match-side .resource-panel {
+    order: 1;
+  }
+  .match-side .result-panel {
+    order: -2;
+  }
+  .match-side .roll-result {
+    order: -1;
+  }
   .board-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }

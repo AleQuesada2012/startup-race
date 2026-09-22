@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -247,6 +247,85 @@ describe('Partida de Startup Race', () => {
       3,
       expect.any(String),
     )
+  })
+
+  it('mantiene la acción disponible si solo el reloj del navegador considera vencido el plazo', async () => {
+    const clockAhead: RoomState = {
+      ...playingRoom,
+      room: { ...playingRoom.room, deadline: '2000-01-01T00:00:00Z' },
+    }
+    render(<App api={gameApi(clockAhead)} />)
+    expect(
+      await screen.findByRole('button', { name: 'Lanzar dado' }),
+    ).toBeEnabled()
+  })
+
+  it('resuelve un plazo vencido cuando un miembro sigue consultando la Sala', async () => {
+    const expiredTurn: RoomState = {
+      ...playingRoom,
+      room: { ...playingRoom.room, deadline: '2000-01-01T00:00:00Z' },
+    }
+    const api = gameApi(expiredTurn)
+    render(<App api={api} />)
+    await screen.findByRole('heading', { name: 'Partida iniciada' })
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(api.resolveTimeout).toHaveBeenCalledWith(
+      'room-1',
+      3,
+      expect.any(String),
+    )
+  })
+
+  it('explica cuando vence un lanzamiento o una decisión de Empresa', async () => {
+    const timedOut: RoomState = {
+      ...playingRoom,
+      room: {
+        ...playingRoom.room,
+        result: { kind: 'roll_timeout', timed_out: true },
+      },
+    }
+    const api = gameApi(timedOut)
+    render(<App api={api} />)
+    expect(
+      await screen.findByText('El Turno terminó sin lanzar el dado.'),
+    ).toBeInTheDocument()
+  })
+
+  it('explica la decisión de Empresa omitida por tiempo', async () => {
+    const timedOut: RoomState = {
+      ...playingRoom,
+      room: {
+        ...playingRoom.room,
+        result: { kind: 'management_timeout', timed_out: true },
+      },
+    }
+    render(<App api={gameApi(timedOut)} />)
+    expect(
+      await screen.findByText(
+        'Se omitió la decisión de Empresa sin cambiar recursos.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('aclara cuando se aplica la Opción gratuita por tiempo', async () => {
+    const timedOut: RoomState = {
+      ...playingRoom,
+      room: {
+        ...playingRoom.room,
+        result: {
+          kind: 'card',
+          timed_out: true,
+          outcome_label: 'Piloto aceptado',
+          explanation: 'Un alcance limitado crea confianza.',
+        },
+      },
+    }
+    render(<App api={gameApi(timedOut)} />)
+    expect(
+      await screen.findByText(
+        'El plazo terminó y se aplicó la Opción gratuita.',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('presenta la Consolidación y la clasificación final sin más controles', async () => {

@@ -235,7 +235,7 @@ function GameBoard({ state, busy, error, onRoll, onChoose, onTimeout }: Props) {
                   <button
                     className="button primary"
                     type="button"
-                    disabled={busy || timeExpired}
+                    disabled={busy}
                     onClick={onRoll}
                   >
                     Lanzar dado
@@ -256,8 +256,23 @@ function GameBoard({ state, busy, error, onRoll, onChoose, onTimeout }: Props) {
                 {typeof result.explanation === 'string' && (
                   <p>{result.explanation}</p>
                 )}
+                {result.timed_out === true && (
+                  <p>El plazo terminó y se aplicó la Opción gratuita.</p>
+                )}
               </section>
             )}
+          {result?.kind === 'roll_timeout' && (
+            <section className="result-panel" aria-label="Resultado del plazo">
+              <h2>Tiempo agotado</h2>
+              <p>El Turno terminó sin lanzar el dado.</p>
+            </section>
+          )}
+          {result?.kind === 'management_timeout' && (
+            <section className="result-panel" aria-label="Resultado del plazo">
+              <h2>Tiempo agotado</h2>
+              <p>Se omitió la decisión de Empresa sin cambiar recursos.</p>
+            </section>
+          )}
           {result?.kind === 'management' &&
             typeof result.explanation === 'string' && (
               <section
@@ -304,7 +319,6 @@ function GameBoard({ state, busy, error, onRoll, onChoose, onTimeout }: Props) {
                         disabled={
                           !isMyTurn ||
                           busy ||
-                          timeExpired ||
                           !canAfford(option.cost, currentPlayer)
                         }
                         onClick={() => onChoose(option.id)}
@@ -342,7 +356,6 @@ function GameBoard({ state, busy, error, onRoll, onChoose, onTimeout }: Props) {
                         disabled={
                           !isMyTurn ||
                           busy ||
-                          timeExpired ||
                           !canAfford(action.cost, currentPlayer)
                         }
                         onClick={() => onChoose(action.id)}

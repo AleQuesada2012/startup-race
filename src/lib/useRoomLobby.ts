@@ -105,6 +105,7 @@ export function useRoomLobby(api: RoomApi) {
     let cancelled = false
     let inFlight = false
     let retryDelay = 2000
+    let lastTimeoutAttempt = -1
     let timer: ReturnType<typeof setTimeout> | undefined
     const roomCode = roomState.room.code
 
@@ -116,6 +117,29 @@ export function useRoomLobby(api: RoomApi) {
         const latest = await api.getRoomState(roomCode)
         if (!cancelled) {
           showRoom(latest)
+          if (
+            latest.room.status === 'playing' &&
+            latest.room.deadline &&
+            Date.parse(latest.room.deadline) <= Date.now() &&
+            latest.room.version !== lastTimeoutAttempt
+          ) {
+            lastTimeoutAttempt = latest.room.version
+            try {
+              const resolved = await api.resolveTimeout(
+                latest.room.id,
+                latest.room.version,
+                crypto.randomUUID(),
+              )
+              if (!cancelled) showRoom(resolved)
+            } catch (cause) {
+              if (!(
+                cause instanceof Error &&
+                cause.message.includes('stale_version')
+              )) {
+                lastTimeoutAttempt = -1
+              }
+            }
+          }
           retryDelay = 2000
         }
       } catch {
@@ -173,35 +197,14 @@ export function useRoomLobby(api: RoomApi) {
     }
   }
 
-  async function startGame() {
+  async function runRoomCommand(
+    command: (state: RoomState, requestId: string) => Promise<RoomState>,
+  ) {
     if (!roomState || busy) return
     setBusy(true)
     setError('')
     try {
-      const next = await api.startGame(
-        roomState.room.id,
-        roomState.room.version,
-        crypto.randomUUID(),
-      )
-      showRoom(next)
-      setError('')
-    } catch (cause) {
-      setError(errorMessage(cause))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function rollDice() {
-    if (!roomState || busy) return
-    setBusy(true)
-    setError('')
-    try {
-      const next = await api.rollDice(
-        roomState.room.id,
-        roomState.room.version,
-        crypto.randomUUID(),
-      )
+      const next = await command(roomState, crypto.randomUUID())
       showRoom(next)
     } catch (cause) {
       setError(errorMessage(cause))
@@ -210,41 +213,28 @@ export function useRoomLobby(api: RoomApi) {
     }
   }
 
-  async function chooseOption(optionId: string) {
-    if (!roomState || busy) return
-    setBusy(true)
-    setError('')
-    try {
-      const next = await api.chooseOption(
-        roomState.room.id,
-        optionId,
-        roomState.room.version,
-        crypto.randomUUID(),
-      )
-      showRoom(next)
-    } catch (cause) {
-      setError(errorMessage(cause))
-    } finally {
-      setBusy(false)
-    }
+  function startGame() {
+    return runRoomCommand((state, requestId) =>
+      api.startGame(state.room.id, state.room.version, requestId),
+    )
   }
 
-  async function resolveTimeout() {
-    if (!roomState || busy) return
-    setBusy(true)
-    setError('')
-    try {
-      const next = await api.resolveTimeout(
-        roomState.room.id,
-        roomState.room.version,
-        crypto.randomUUID(),
-      )
-      showRoom(next)
-    } catch (cause) {
-      setError(errorMessage(cause))
-    } finally {
-      setBusy(false)
-    }
+  function rollDice() {
+    return runRoomCommand((state, requestId) =>
+      api.rollDice(state.room.id, state.room.version, requestId),
+    )
+  }
+
+  function chooseOption(optionId: string) {
+    return runRoomCommand((state, requestId) =>
+      api.chooseOption(state.room.id, optionId, state.room.version, requestId),
+    )
+  }
+
+  function resolveTimeout() {
+    return runRoomCommand((state, requestId) =>
+      api.resolveTimeout(state.room.id, state.room.version, requestId),
+    )
   }
 
   const selfIsHost =
