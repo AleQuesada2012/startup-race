@@ -221,4 +221,56 @@ describe('lobby de Startup Race', () => {
     window.dispatchEvent(new Event('focus'))
     expect(screen.getByText('Bea')).toBeInTheDocument()
   })
+
+  it('muestra validación propia en español para campos vacíos', async () => {
+    const user = userEvent.setup()
+    render(<App api={roomApi()} />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Escribe un nombre de 1 a 24 caracteres.',
+    )
+  })
+
+  it('conserva un error de acción cuando llega el mismo estado de la Sala', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const api = roomApi({
+      getRoomState: vi.fn().mockResolvedValue(waitingRoom),
+      startGame: vi.fn().mockRejectedValue(new Error('stale_version')),
+    })
+    render(<App api={api} />)
+    await user.click(
+      await screen.findByRole('button', { name: 'Iniciar partida' }),
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La sala cambió. Actualiza e inténtalo de nuevo.',
+    )
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La sala cambió. Actualiza e inténtalo de nuevo.',
+    )
+  })
+
+  it('observa nuevas versiones de una Partida ya iniciada', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const playingRoom: RoomState = {
+      ...waitingRoom,
+      room: { ...waitingRoom.room, status: 'playing', version: 2 },
+    }
+    const nextRound: RoomState = {
+      ...playingRoom,
+      room: { ...playingRoom.room, version: 3, round: 2 },
+    }
+    const getRoomState = vi
+      .fn()
+      .mockResolvedValueOnce(playingRoom)
+      .mockResolvedValue(nextRound)
+    render(<App api={roomApi({ getRoomState })} />)
+    expect(
+      await screen.findByRole('heading', { name: 'Partida iniciada' }),
+    ).toBeInTheDocument()
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByText('Ronda 2')).toBeInTheDocument()
+  })
 })
