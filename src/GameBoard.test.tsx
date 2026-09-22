@@ -138,9 +138,9 @@ describe('Partida de Startup Race', () => {
     await screen.findByRole('heading', { name: 'Partida iniciada' })
     await act(async () => window.dispatchEvent(new Event('focus')))
     await act(async () => window.dispatchEvent(new Event('focus')))
-    expect(resolveTimeout).toHaveBeenCalledTimes(2)
-    expect(resolveTimeout.mock.calls[1][2]).toBe(
-      resolveTimeout.mock.calls[0][2],
+    expect(resolveTimeout).toHaveBeenCalledTimes(3)
+    expect(new Set(resolveTimeout.mock.calls.map((call) => call[2])).size).toBe(
+      1,
     )
   })
 

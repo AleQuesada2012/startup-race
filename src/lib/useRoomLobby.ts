@@ -143,18 +143,20 @@ export function useRoomLobby(api: RoomApi) {
   )
 
   useEffect(() => {
-    const initialCode = roomCodeFromUrl()
-    if (!initialCode) return
+    const restoring = !roomState
+    const roomCode = roomState?.room.code ?? roomCodeFromUrl()
+    if (!roomCode) return
     let cancelled = false
-    let done = false
+    let stopped = false
     let inFlight = false
     let retryDelay = 2000
+    let lastTimeoutAttempt = -1
     let timer: ReturnType<typeof setTimeout> | undefined
 
-    async function restore() {
+    async function refresh() {
       if (
         cancelled ||
-        done ||
+        stopped ||
         inFlight ||
         document.visibilityState === 'hidden'
       )
@@ -162,69 +164,15 @@ export function useRoomLobby(api: RoomApi) {
       clearTimeout(timer)
       inFlight = true
       try {
-        await api.ensureIdentity()
-        const restored = await readRoom(initialCode)
-        if (!cancelled) {
-          done = true
-          showRoom(restored)
-          markConnected()
-          setError('')
-        }
-      } catch (cause) {
-        if (cancelled) return
-        if (isNetworkFailure(cause)) {
-          setConnectionStatus('reconnecting')
-          setError('')
-          retryDelay = Math.min(retryDelay * 2, 30000)
-          timer = setTimeout(() => void restore(), retryDelay)
-        } else if (
-          cause instanceof Error &&
-          cause.message.includes('not_room_member')
-        ) {
-          done = true
-          setMode('join')
-          setError('')
-        } else {
-          done = true
-          setError(errorMessage(cause))
-        }
-      } finally {
-        inFlight = false
-      }
-    }
-
-    function onFocus() {
-      void restore()
-    }
-    void restore()
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onFocus)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onFocus)
-    }
-  }, [api, readRoom, showRoom])
-
-  useEffect(() => {
-    if (!roomState) return
-    let cancelled = false
-    let inFlight = false
-    let retryDelay = 2000
-    let lastTimeoutAttempt = -1
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const roomCode = roomState.room.code
-
-    async function refresh() {
-      if (cancelled || inFlight || document.visibilityState === 'hidden') return
-      clearTimeout(timer)
-      inFlight = true
-      try {
+        if (restoring) await api.ensureIdentity()
         const latest = await readRoom(roomCode)
         if (!cancelled) {
           showRoom(latest)
           markConnected()
+          if (restoring) {
+            stopped = true
+            setError('')
+          }
           if (
             latest.room.status === 'playing' &&
             latest.room.deadline &&
@@ -255,19 +203,35 @@ export function useRoomLobby(api: RoomApi) {
           }
           retryDelay = 2000
         }
-      } catch {
-        retryDelay = Math.min(retryDelay * 2, 30000)
-        if (!cancelled) setConnectionStatus('reconnecting')
+      } catch (cause) {
+        if (cancelled) return
+        if (
+          restoring &&
+          cause instanceof Error &&
+          cause.message.includes('not_room_member')
+        ) {
+          stopped = true
+          setMode('join')
+          setError('')
+        } else if (restoring && !isNetworkFailure(cause)) {
+          stopped = true
+          setError(errorMessage(cause))
+        } else {
+          retryDelay = Math.min(retryDelay * 2, 30000)
+          setConnectionStatus('reconnecting')
+          if (restoring) setError('')
+        }
       } finally {
         inFlight = false
-        if (!cancelled) timer = setTimeout(refresh, retryDelay)
+        if (!cancelled && !stopped) timer = setTimeout(refresh, retryDelay)
       }
     }
 
     function onFocus() {
       void refresh()
     }
-    timer = setTimeout(refresh, retryDelay)
+    if (restoring) void refresh()
+    else timer = setTimeout(refresh, retryDelay)
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onFocus)
     return () => {
