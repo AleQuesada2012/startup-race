@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -68,7 +68,10 @@ function roomApi(overrides: Partial<RoomApi> = {}): RoomApi {
 
 describe('lobby de Startup Race', () => {
   afterEach(cleanup)
-  beforeEach(() => window.history.replaceState({}, '', '/'))
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+    window.localStorage.clear()
+  })
 
   it('presenta las entradas públicas para crear o unirse a una Sala', () => {
     render(<App api={roomApi()} />)
@@ -275,5 +278,254 @@ describe('lobby de Startup Race', () => {
     ).toBeInTheDocument()
     window.dispatchEvent(new Event('focus'))
     expect(await screen.findByText('Ronda 2 de 12')).toBeInTheDocument()
+  })
+
+  it('reintenta crear una Sala con el mismo ID de solicitud tras perder la respuesta', async () => {
+    const user = userEvent.setup()
+    const createRoom = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ createRoom })} />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Reconectando')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(createRoom).toHaveBeenCalledTimes(2)
+    expect(createRoom.mock.calls[1][2]).toBe(createRoom.mock.calls[0][2])
+  })
+
+  it('recuerda el ID de cada creación aunque se intente otro nombre entre reintentos', async () => {
+    const user = userEvent.setup()
+    const createRoom = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ createRoom })} />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    const name = screen.getByLabelText('Tu nombre')
+    await user.type(name, 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await screen.findByRole('status')
+    await user.clear(name)
+    await user.type(name, 'Bea')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await screen.findByRole('alert')
+    await user.clear(name)
+    await user.type(name, 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await screen.findByRole('heading', { name: 'Sala ABC234' })
+    expect(createRoom).toHaveBeenCalledTimes(3)
+    expect(createRoom.mock.calls[2][2]).toBe(createRoom.mock.calls[0][2])
+    expect(createRoom.mock.calls[2][2]).not.toBe(createRoom.mock.calls[1][2])
+  })
+
+  it('anuncia la reconexión durante un fallo de lectura y la retira al recuperarse', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const getRoomState = vi
+      .fn()
+      .mockResolvedValueOnce(waitingRoom)
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ getRoomState })} />)
+    await screen.findByRole('heading', { name: 'Sala ABC234' })
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByRole('status')).toHaveTextContent('Reconectando')
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByText('Conexión restablecida')).toBeInTheDocument()
+  })
+
+  it('recupera una Sala compartida después de un fallo de red inicial', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    vi.useFakeTimers()
+    try {
+      const getRoomState = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Failed to fetch'))
+        .mockResolvedValue(waitingRoom)
+      const view = render(<App api={roomApi({ getRoomState })} />)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('Reconectando')
+      expect(getRoomState).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(getRoomState).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(
+        screen.getByRole('heading', { name: 'Sala ABC234' }),
+      ).toBeInTheDocument()
+      expect(screen.getByText('Conexión restablecida')).toBeInTheDocument()
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reintenta cargar la Sala compartida al recuperar el foco', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const getRoomState = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ getRoomState })} />)
+    expect(await screen.findByRole('status')).toHaveTextContent('Reconectando')
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(getRoomState).toHaveBeenCalledTimes(2)
+  })
+
+  it('no solapa consultas de la Sala al recibir focos repetidos', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    let finishRefresh!: (state: RoomState) => void
+    const pendingRefresh = new Promise<RoomState>((resolve) => {
+      finishRefresh = resolve
+    })
+    const getRoomState = vi
+      .fn()
+      .mockResolvedValueOnce(waitingRoom)
+      .mockReturnValueOnce(pendingRefresh)
+    render(<App api={roomApi({ getRoomState })} />)
+    await screen.findByRole('heading', { name: 'Sala ABC234' })
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(getRoomState).toHaveBeenCalledTimes(2)
+    await act(async () => finishRefresh(waitingRoom))
+  })
+
+  it('serializa una consulta posterior a un comando y otra solicitada por foco', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    let finishCommandRefresh!: (state: RoomState) => void
+    const pendingCommandRefresh = new Promise<RoomState>((resolve) => {
+      finishCommandRefresh = resolve
+    })
+    const started: string[] = []
+    const getRoomState = vi
+      .fn()
+      .mockResolvedValueOnce(waitingRoom)
+      .mockImplementationOnce(() => {
+        started.push('command')
+        return pendingCommandRefresh
+      })
+      .mockImplementationOnce(() => {
+        started.push('focus')
+        return Promise.resolve(waitingRoom)
+      })
+    const next: RoomState = {
+      ...waitingRoom,
+      room: { ...waitingRoom.room, status: 'playing', version: 2 },
+    }
+    render(
+      <App
+        api={roomApi({
+          getRoomState,
+          startGame: vi.fn().mockResolvedValue(next),
+        })}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(
+      await screen.findByRole('button', { name: 'Iniciar partida' }),
+    )
+    expect(started).toEqual(['command'])
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(started).toEqual(['command'])
+    await act(async () => finishCommandRefresh(next))
+    expect(started).toEqual(['command', 'focus'])
+  })
+
+  it('consulta la Sala al volver a una pestaña visible', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    const priorVisibility = Object.getOwnPropertyDescriptor(
+      document,
+      'visibilityState',
+    )
+    let visible = true
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (visible ? 'visible' : 'hidden'),
+    })
+    try {
+      const getRoomState = vi.fn().mockResolvedValue(waitingRoom)
+      render(<App api={roomApi({ getRoomState })} />)
+      await screen.findByRole('heading', { name: 'Sala ABC234' })
+      visible = false
+      await act(async () => window.dispatchEvent(new Event('focus')))
+      expect(getRoomState).toHaveBeenCalledTimes(1)
+      visible = true
+      await act(async () =>
+        document.dispatchEvent(new Event('visibilitychange')),
+      )
+      expect(getRoomState).toHaveBeenCalledTimes(2)
+    } finally {
+      if (priorVisibility)
+        Object.defineProperty(document, 'visibilityState', priorVisibility)
+    }
+  })
+
+  it('espacia las consultas después de un fallo de red', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    vi.useFakeTimers()
+    try {
+      const getRoomState = vi
+        .fn()
+        .mockResolvedValueOnce(waitingRoom)
+        .mockRejectedValueOnce(new Error('Failed to fetch'))
+        .mockResolvedValue(waitingRoom)
+      const view = render(<App api={roomApi({ getRoomState })} />)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(
+        screen.getByRole('heading', { name: 'Sala ABC234' }),
+      ).toBeInTheDocument()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(getRoomState).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(getRoomState).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(getRoomState).toHaveBeenCalledTimes(3)
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('mantiene los sonidos silenciados hasta que el Jugador los active y recuerda su elección', async () => {
+    const user = userEvent.setup()
+    const first = render(<App api={roomApi()} />)
+    const soundButton = screen.getByRole('button', { name: 'Activar sonidos' })
+    expect(soundButton).toHaveAttribute('aria-pressed', 'false')
+    await user.click(soundButton)
+    expect(
+      screen.getByRole('button', { name: 'Silenciar sonidos' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(window.localStorage.getItem('startup-race:sound')).toBe('on')
+    first.unmount()
+    render(<App api={roomApi()} />)
+    await user.click(screen.getByRole('button', { name: 'Silenciar sonidos' }))
+    expect(
+      screen.getByRole('button', { name: 'Activar sonidos' }),
+    ).toHaveAttribute('aria-pressed', 'false')
+    expect(window.localStorage.getItem('startup-race:sound')).toBe('off')
   })
 })

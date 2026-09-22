@@ -62,6 +62,43 @@ main {
   letter-spacing: 0.08em;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sound-toggle {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid #46675a;
+  border-radius: 999px;
+  background: #fffdf7;
+  color: #173f35;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sound-toggle:focus-visible {
+  outline: 3px solid #f09b32;
+  outline-offset: 3px;
+}
+
+.connection-status {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 0.7rem 1rem;
+  border: 1px solid #9c6b20;
+  border-radius: 0.7rem;
+  background: #fff2d3;
+  color: #432d0d;
+  font-weight: 700;
+}
+
 .hero {
   display: grid;
   width: min(1120px, calc(100% - 2rem));

@@ -34,6 +34,9 @@ function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
     roomState,
     busy,
     error,
+    connectionStatus,
+    soundEnabled,
+    toggleSound,
     setError,
     submit,
     startGame,
@@ -48,8 +51,25 @@ function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
         <a className="brand" href="/" aria-label="Startup Race, inicio">
           <span aria-hidden="true">SR</span>Startup Race
         </a>
-        <span className="status-badge">MVP académico</span>
+        <div className="header-actions">
+          <button
+            className="sound-toggle"
+            type="button"
+            aria-pressed={soundEnabled}
+            onClick={toggleSound}
+          >
+            {soundEnabled ? 'Silenciar sonidos' : 'Activar sonidos'}
+          </button>
+          <span className="status-badge">MVP académico</span>
+        </div>
       </header>
+      {connectionStatus !== 'connected' && (
+        <p className="connection-status" role="status">
+          {connectionStatus === 'reconnecting'
+            ? 'Reconectando con la Sala…'
+            : 'Conexión restablecida'}
+        </p>
+      )}
 
       {roomState && roomState.room.status !== 'waiting' ? (
         <GameBoard
