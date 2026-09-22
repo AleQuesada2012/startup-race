@@ -299,6 +299,32 @@ describe('lobby de Startup Race', () => {
     expect(createRoom.mock.calls[1][2]).toBe(createRoom.mock.calls[0][2])
   })
 
+  it('recuerda el ID de cada creación aunque se intente otro nombre entre reintentos', async () => {
+    const user = userEvent.setup()
+    const createRoom = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(waitingRoom)
+    render(<App api={roomApi({ createRoom })} />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    const name = screen.getByLabelText('Tu nombre')
+    await user.type(name, 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await screen.findByRole('status')
+    await user.clear(name)
+    await user.type(name, 'Bea')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await screen.findByRole('alert')
+    await user.clear(name)
+    await user.type(name, 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await screen.findByRole('heading', { name: 'Sala ABC234' })
+    expect(createRoom).toHaveBeenCalledTimes(3)
+    expect(createRoom.mock.calls[2][2]).toBe(createRoom.mock.calls[0][2])
+    expect(createRoom.mock.calls[2][2]).not.toBe(createRoom.mock.calls[1][2])
+  })
+
   it('anuncia la reconexión durante un fallo de lectura y la retira al recuperarse', async () => {
     window.history.replaceState({}, '', '/?room=ABC234')
     const getRoomState = vi
@@ -332,6 +358,47 @@ describe('lobby de Startup Race', () => {
     })
     expect(getRoomState).toHaveBeenCalledTimes(2)
     await act(async () => finishRefresh(waitingRoom))
+  })
+
+  it('serializa una consulta posterior a un comando y otra solicitada por foco', async () => {
+    window.history.replaceState({}, '', '/?room=ABC234')
+    let finishCommandRefresh!: (state: RoomState) => void
+    const pendingCommandRefresh = new Promise<RoomState>((resolve) => {
+      finishCommandRefresh = resolve
+    })
+    const started: string[] = []
+    const getRoomState = vi
+      .fn()
+      .mockResolvedValueOnce(waitingRoom)
+      .mockImplementationOnce(() => {
+        started.push('command')
+        return pendingCommandRefresh
+      })
+      .mockImplementationOnce(() => {
+        started.push('focus')
+        return Promise.resolve(waitingRoom)
+      })
+    const next: RoomState = {
+      ...waitingRoom,
+      room: { ...waitingRoom.room, status: 'playing', version: 2 },
+    }
+    render(
+      <App
+        api={roomApi({
+          getRoomState,
+          startGame: vi.fn().mockResolvedValue(next),
+        })}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(
+      await screen.findByRole('button', { name: 'Iniciar partida' }),
+    )
+    expect(started).toEqual(['command'])
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(started).toEqual(['command'])
+    await act(async () => finishCommandRefresh(next))
+    expect(started).toEqual(['command', 'focus'])
   })
 
   it('consulta la Sala al volver a una pestaña visible', async () => {

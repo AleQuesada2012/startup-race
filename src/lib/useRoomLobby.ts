@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { playCue, prepareAudio } from './audioCues'
 import type { EntrepreneurshipType, RoomApi, RoomState } from './roomApi'
+import { useRoomAudio } from './useRoomAudio'
 
 function errorMessage(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error)
@@ -57,14 +57,6 @@ function isNetworkFailure(error: unknown): boolean {
   )
 }
 
-function storedSoundPreference(): boolean {
-  try {
-    return window.localStorage.getItem('startup-race:sound') === 'on'
-  } catch {
-    return false
-  }
-}
-
 export function useRoomLobby(api: RoomApi) {
   const [mode, setMode] = useState<'home' | 'create' | 'join'>(() =>
     roomCodeFromUrl() ? 'join' : 'home',
@@ -78,21 +70,22 @@ export function useRoomLobby(api: RoomApi) {
   const [connectionStatus, setConnectionStatus] = useState<
     'connected' | 'reconnecting' | 'restored'
   >('connected')
-  const [soundEnabled, setSoundEnabled] = useState(storedSoundPreference)
-  const soundEnabledRef = useRef(soundEnabled)
+  const { soundEnabled, toggleSound, prepareForCommand, playStateCue } =
+    useRoomAudio()
   const currentVersion = useRef(-1)
-  const readInFlight = useRef<Promise<RoomState> | null>(null)
-  const pendingRequest = useRef<{ key: string; id: string } | null>(null)
+  const readTail = useRef<Promise<void>>(Promise.resolve())
+  const pendingRequests = useRef(new Map<string, string>())
 
   function requestIdFor(key: string): string {
-    if (pendingRequest.current?.key === key) return pendingRequest.current.id
+    const existing = pendingRequests.current.get(key)
+    if (existing) return existing
     const id = crypto.randomUUID()
-    pendingRequest.current = { key, id }
+    pendingRequests.current.set(key, id)
     return id
   }
 
   function clearRequest(key: string) {
-    if (pendingRequest.current?.key === key) pendingRequest.current = null
+    pendingRequests.current.delete(key)
   }
 
   function markConnected() {
@@ -102,21 +95,13 @@ export function useRoomLobby(api: RoomApi) {
   }
 
   const readRoom = useCallback(
-    async (roomCode: string): Promise<RoomState> => {
-      while (readInFlight.current) {
-        try {
-          await readInFlight.current
-        } catch {
-          /* A later read can retry. */
-        }
-      }
-      const pending = api.getRoomState(roomCode)
-      readInFlight.current = pending
-      try {
-        return await pending
-      } finally {
-        if (readInFlight.current === pending) readInFlight.current = null
-      }
+    (roomCode: string): Promise<RoomState> => {
+      const pending = readTail.current.then(() => api.getRoomState(roomCode))
+      readTail.current = pending.then(
+        () => undefined,
+        () => undefined,
+      )
+      return pending
     },
     [api],
   )
@@ -140,41 +125,22 @@ export function useRoomLobby(api: RoomApi) {
     return () => window.clearTimeout(timer)
   }, [connectionStatus])
 
-  function showRoom(next: RoomState) {
-    if (next.room.version <= currentVersion.current) return
-    const hadPreviousState = currentVersion.current >= 0
-    currentVersion.current = next.room.version
-    setRoomState(next)
-    setCode(next.room.code)
-    window.history.replaceState(
-      {},
-      '',
-      `/?room=${encodeURIComponent(next.room.code)}`,
-    )
-    if (
-      hadPreviousState &&
-      soundEnabledRef.current &&
-      next.room.result &&
-      typeof next.room.result === 'object'
-    ) {
-      const kind = (next.room.result as Record<string, unknown>).kind
-      if (kind === 'roll') playCue('roll')
-      else if (kind === 'card' || kind === 'management') playCue('decision')
-      else if (kind === 'match_finished') playCue('win')
-    }
-  }
-
-  function toggleSound() {
-    const next = !soundEnabledRef.current
-    soundEnabledRef.current = next
-    setSoundEnabled(next)
-    try {
-      window.localStorage.setItem('startup-race:sound', next ? 'on' : 'off')
-    } catch {
-      /* Keep the in-memory preference. */
-    }
-    if (next) prepareAudio()
-  }
+  const showRoom = useCallback(
+    (next: RoomState) => {
+      if (next.room.version <= currentVersion.current) return
+      const hadPreviousState = currentVersion.current >= 0
+      currentVersion.current = next.room.version
+      setRoomState(next)
+      setCode(next.room.code)
+      window.history.replaceState(
+        {},
+        '',
+        `/?room=${encodeURIComponent(next.room.code)}`,
+      )
+      playStateCue(next, hadPreviousState)
+    },
+    [playStateCue],
+  )
 
   useEffect(() => {
     const initialCode = roomCodeFromUrl()
@@ -205,7 +171,7 @@ export function useRoomLobby(api: RoomApi) {
     return () => {
       cancelled = true
     }
-  }, [api, readRoom])
+  }, [api, readRoom, showRoom])
 
   useEffect(() => {
     if (!roomState) return
@@ -232,12 +198,14 @@ export function useRoomLobby(api: RoomApi) {
             latest.room.version !== lastTimeoutAttempt
           ) {
             lastTimeoutAttempt = latest.room.version
+            const requestKey = `${latest.room.id}:${latest.room.version}:resolve_timeout`
             try {
               const resolved = await api.resolveTimeout(
                 latest.room.id,
                 latest.room.version,
-                crypto.randomUUID(),
+                requestIdFor(requestKey),
               )
+              clearRequest(requestKey)
               if (!cancelled) {
                 showRoom(resolved)
                 void refreshAfterCommand(resolved)
@@ -319,7 +287,7 @@ export function useRoomLobby(api: RoomApi) {
     command: (state: RoomState, requestId: string) => Promise<RoomState>,
   ) {
     if (!roomState || busy) return
-    if (soundEnabledRef.current) prepareAudio()
+    prepareForCommand()
     setBusy(true)
     setError('')
     try {

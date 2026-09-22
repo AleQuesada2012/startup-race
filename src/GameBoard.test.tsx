@@ -124,6 +124,26 @@ describe('Partida de Startup Race', () => {
     expect(rollDice.mock.calls[1][2]).toBe(rollDice.mock.calls[0][2])
   })
 
+  it('reutiliza el ID cuando la resolución automática del tiempo pierde la respuesta', async () => {
+    const expired: RoomState = {
+      ...playingRoom,
+      room: { ...playingRoom.room, deadline: '2020-01-01T00:00:00Z' },
+    }
+    const api = gameApi(expired)
+    const resolveTimeout = vi
+      .fn()
+      .mockRejectedValue(new Error('Failed to fetch'))
+    api.resolveTimeout = resolveTimeout
+    render(<App api={api} />)
+    await screen.findByRole('heading', { name: 'Partida iniciada' })
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(resolveTimeout).toHaveBeenCalledTimes(2)
+    expect(resolveTimeout.mock.calls[1][2]).toBe(
+      resolveTimeout.mock.calls[0][2],
+    )
+  })
+
   it('consulta la Sala inmediatamente después de un comando', async () => {
     const user = userEvent.setup()
     const next: RoomState = {
