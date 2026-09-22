@@ -1,4 +1,10 @@
 import './App.css'
+import {
+  getDefaultRoomApi,
+  type EntrepreneurshipType,
+  type RoomApi,
+} from './lib/roomApi'
+import { useRoomLobby } from './lib/useRoomLobby'
 
 const journeyStops = [
   { boardPosition: 0, label: 'Idea' },
@@ -8,57 +14,222 @@ const journeyStops = [
   { boardPosition: 22, label: 'Crecimiento' },
 ] as const
 
-function App() {
+const typeNames: Record<EntrepreneurshipType, string> = {
+  technology: 'Tecnología',
+  social: 'Social',
+  traditional: 'Tradicional',
+}
+
+function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
+  const {
+    mode,
+    setMode,
+    code,
+    setCode,
+    name,
+    setName,
+    type,
+    setType,
+    roomState,
+    busy,
+    error,
+    setError,
+    submit,
+    startGame,
+    selfIsHost,
+  } = useRoomLobby(api)
   return (
     <main>
       <header className="site-header">
         <a className="brand" href="/" aria-label="Startup Race, inicio">
-          <span aria-hidden="true">SR</span>
-          Startup Race
+          <span aria-hidden="true">SR</span>Startup Race
         </a>
         <span className="status-badge">MVP académico</span>
       </header>
 
-      <section className="hero" aria-labelledby="hero-title">
-        <div className="hero-copy">
-          <p className="eyebrow">El juego de crear, decidir y crecer</p>
-          <h1 id="hero-title">Startup Race</h1>
-          <p className="lede">
-            Convierte una idea en empresa. Toma decisiones, enfrenta crisis y
-            reúne los recursos para consolidar tu emprendimiento antes que los
-            demás.
+      {roomState ? (
+        <section className="lobby" aria-labelledby="room-title">
+          <p className="eyebrow">
+            {roomState.room.status === 'waiting'
+              ? 'Sala de espera'
+              : 'Startup Race'}
           </p>
-          <div className="actions" aria-label="Opciones para jugar">
-            <button className="button primary" type="button">
-              Crear una sala
-            </button>
-            <button className="button secondary" type="button">
-              Unirme con un código
-            </button>
-          </div>
-          <p className="player-note">Para 2–4 jugadores · Sin cuentas</p>
-        </div>
-
-        <div className="game-card" aria-label="Ruta de una partida">
-          <div className="game-card-top">
-            <span>Tu ruta emprendedora</span>
-            <span aria-hidden="true">↗</span>
-          </div>
-          <ol className="stage-list">
-            {journeyStops.map(({ boardPosition, label }) => (
-              <li key={label}>
-                <span className="stage-number">{boardPosition}</span>
-                <span>{label}</span>
+          <h1 id="room-title">
+            {roomState.room.status === 'waiting'
+              ? `Sala ${roomState.room.code}`
+              : 'Partida iniciada'}
+          </h1>
+          <p className="lede">
+            {roomState.room.status === 'waiting'
+              ? 'Comparte el código para invitar a tus compañeros.'
+              : `Ronda ${roomState.room.round}`}
+          </p>
+          <p className="room-code">
+            Código: <strong>{roomState.room.code}</strong>
+          </p>
+          <h2>Jugadores ({roomState.players.length}/4)</h2>
+          <ul className="player-list">
+            {roomState.players.map((player) => (
+              <li key={player.id}>
+                <strong>{player.name}</strong>
+                <span>{typeNames[player.entrepreneurship_type]}</span>
+                {player.is_host && <span>Anfitrión</span>}
+                {player.is_self && <span>Tú</span>}
               </li>
             ))}
-          </ol>
-          <div className="resource-row" aria-label="Recursos para consolidar">
-            <span>Capital</span>
-            <span>Reputación</span>
-            <span>Innovación</span>
+          </ul>
+          {roomState.room.status === 'waiting' &&
+            (selfIsHost ? (
+              <button
+                className="button primary"
+                type="button"
+                disabled={busy || roomState.players.length < 2}
+                onClick={startGame}
+              >
+                Iniciar partida
+              </button>
+            ) : (
+              <p>Esperando a que el anfitrión inicie la partida.</p>
+            ))}
+          {error && (
+            <p role="alert" className="form-error">
+              {error}
+            </p>
+          )}
+        </section>
+      ) : (
+        <section className="hero" aria-labelledby="hero-title">
+          <div className="hero-copy">
+            <p className="eyebrow">El juego de crear, decidir y crecer</p>
+            <h1 id="hero-title">Startup Race</h1>
+            <p className="lede">
+              Convierte una idea en empresa. Toma decisiones, enfrenta crisis y
+              reúne los recursos para consolidar tu emprendimiento antes que los
+              demás.
+            </p>
+            {mode === 'home' ? (
+              <div className="actions" aria-label="Opciones para jugar">
+                <button
+                  className="button primary"
+                  type="button"
+                  onClick={() => {
+                    setMode('create')
+                    setError('')
+                  }}
+                >
+                  Crear una sala
+                </button>
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => {
+                    setMode('join')
+                    setError('')
+                  }}
+                >
+                  Unirme con un código
+                </button>
+              </div>
+            ) : (
+              <form className="room-form" onSubmit={submit} noValidate>
+                <h2>
+                  {mode === 'create' ? 'Crear una sala' : 'Unirme a una sala'}
+                </h2>
+                {mode === 'join' && (
+                  <label>
+                    Código de sala
+                    <input
+                      value={code}
+                      onChange={(event) =>
+                        setCode(event.target.value.toUpperCase())
+                      }
+                      maxLength={6}
+                      required
+                      autoComplete="off"
+                    />
+                  </label>
+                )}
+                <label>
+                  Tu nombre
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    maxLength={24}
+                    required
+                    autoComplete="name"
+                  />
+                </label>
+                <label>
+                  Tipo de emprendimiento
+                  <select
+                    value={type}
+                    onChange={(event) =>
+                      setType(event.target.value as EntrepreneurshipType)
+                    }
+                  >
+                    <option value="technology">Tecnología</option>
+                    <option value="social">Social</option>
+                    <option value="traditional">Tradicional</option>
+                  </select>
+                </label>
+                {error && (
+                  <p role="alert" className="form-error">
+                    {error}
+                  </p>
+                )}
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={busy}
+                >
+                  {busy
+                    ? 'Conectando…'
+                    : mode === 'create'
+                      ? 'Crear sala'
+                      : 'Unirme a la sala'}
+                </button>
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => {
+                    setMode('home')
+                    setError('')
+                  }}
+                >
+                  Volver
+                </button>
+              </form>
+            )}
+            {mode === 'home' && (
+              <p className="player-note">Para 2–4 jugadores · Sin cuentas</p>
+            )}
+            {mode === 'home' && error && (
+              <p role="alert" className="form-error">
+                {error}
+              </p>
+            )}
           </div>
-        </div>
-      </section>
+          <div className="game-card" aria-label="Ruta de una partida">
+            <div className="game-card-top">
+              <span>Tu ruta emprendedora</span>
+              <span aria-hidden="true">↗</span>
+            </div>
+            <ol className="stage-list">
+              {journeyStops.map(({ boardPosition, label }) => (
+                <li key={label}>
+                  <span className="stage-number">{boardPosition}</span>
+                  <span>{label}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="resource-row" aria-label="Recursos para consolidar">
+              <span>Capital</span>
+              <span>Reputación</span>
+              <span>Innovación</span>
+            </div>
+          </div>
+        </section>
+      )}
     </main>
   )
 }
