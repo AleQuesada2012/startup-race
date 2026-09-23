@@ -68,6 +68,9 @@ Supabase stack.
    Auth validates each token when the app creates an anonymous identity. The
    Turnstile secret, Supabase secret/service-role key, database password, and
    Cloudflare API token must never be added as `VITE_` variables or committed.
+   Supabase Auth verifies the token with Turnstile, but its built-in CAPTCHA
+   setting does not let this app enforce a token action or exact hostname.
+   Restrict the widget's allowed hostnames to the deployed app domains.
 
 5. Set the Supabase Auth site URL and redirect allow-list to the deployed domains.
 6. Verify a preview deployment before promoting `main` to production.
