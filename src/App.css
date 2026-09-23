@@ -99,6 +99,20 @@ main {
   font-weight: 700;
 }
 
+.turnstile-challenge {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 1rem;
+  border: 1px solid #c7c9bf;
+  border-radius: 0.7rem;
+  background: #fffdf7;
+}
+
+.turnstile-challenge p {
+  margin: 0 0 0.75rem;
+  font-weight: 700;
+}
+
 .hero {
   display: grid;
   width: min(1120px, calc(100% - 2rem));

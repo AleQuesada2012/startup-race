@@ -32,7 +32,7 @@ export interface RoomState {
   players: RoomPlayer[]
 }
 export interface RoomApi {
-  ensureIdentity(): Promise<void>
+  ensureIdentity(requestCaptchaToken: () => Promise<string>): Promise<void>
   createRoom(
     name: string,
     type: EntrepreneurshipType,
@@ -74,14 +74,27 @@ function unwrap<T>(data: T | null, error: { message: string } | null): T {
   return data
 }
 
-function createRoomApi(client: SupabaseClient): RoomApi {
+export function createRoomApi(client: SupabaseClient): RoomApi {
+  let identityInFlight: Promise<void> | null = null
   return {
-    async ensureIdentity() {
-      const { data, error } = await client.auth.getSession()
-      if (error) throw new Error(error.message)
-      if (!data.session) {
-        const { error: signInError } = await client.auth.signInAnonymously()
-        if (signInError) throw new Error(signInError.message)
+    async ensureIdentity(requestCaptchaToken) {
+      if (identityInFlight) return identityInFlight
+      const attempt = (async () => {
+        const { data, error } = await client.auth.getSession()
+        if (error) throw new Error(error.message)
+        if (!data.session) {
+          const captchaToken = await requestCaptchaToken()
+          const { error: signInError } = await client.auth.signInAnonymously({
+            options: { captchaToken },
+          })
+          if (signInError) throw new Error(signInError.message)
+        }
+      })()
+      identityInFlight = attempt
+      try {
+        await attempt
+      } finally {
+        if (identityInFlight === attempt) identityInFlight = null
       }
     },
     async createRoom(name, type, requestId) {

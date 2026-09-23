@@ -51,10 +51,24 @@ Supabase stack.
 ## Deployment
 
 1. Create a Supabase project, enable anonymous sign-ins, and apply the migrations.
-2. Create a Turnstile widget for the production Vercel hostname.
+2. Allow the deployment's exact hostname on the existing Turnstile widget. For
+   local development, allow `localhost` and `127.0.0.1` if both are used.
 3. Import this repository into Vercel.
-4. Configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and
-   `VITE_TURNSTILE_SITE_KEY` in Preview and Production environments.
+4. Configure these three browser-facing variables in both Vercel Preview and
+   Production, then redeploy so Vite includes the new values in the build:
+
+   | Vercel variable                 | Value                                      |
+   | ------------------------------- | ------------------------------------------ |
+   | `VITE_SUPABASE_URL`             | Project URL from Supabase's Connect dialog |
+   | `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key from the same project      |
+   | `VITE_TURNSTILE_SITE_KEY`       | Existing widget's public site key          |
+
+   In Supabase Authentication → Bot and Abuse Protection, enable CAPTCHA,
+   choose Cloudflare Turnstile, and enter the **Turnstile secret** there. Supabase
+   Auth validates each token when the app creates an anonymous identity. The
+   Turnstile secret, Supabase secret/service-role key, database password, and
+   Cloudflare API token must never be added as `VITE_` variables or committed.
+
 5. Set the Supabase Auth site URL and redirect allow-list to the deployed domains.
 6. Verify a preview deployment before promoting `main` to production.
 

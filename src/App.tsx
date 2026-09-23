@@ -1,4 +1,5 @@
 import './App.css'
+import { lazy, Suspense } from 'react'
 import GameBoard from './GameBoard'
 import {
   getDefaultRoomApi,
@@ -6,6 +7,12 @@ import {
   type RoomApi,
 } from './lib/roomApi'
 import { useRoomLobby } from './lib/useRoomLobby'
+import { useTurnstileChallenge } from './lib/useTurnstileChallenge'
+
+const Turnstile = lazy(async () => {
+  const { Turnstile: component } = await import('@marsidev/react-turnstile')
+  return { default: component }
+})
 
 const journeyStops = [
   { boardPosition: 0, label: 'Idea' },
@@ -21,7 +28,14 @@ const typeNames: Record<EntrepreneurshipType, string> = {
   traditional: 'Tradicional',
 }
 
-function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
+function App({
+  api = getDefaultRoomApi(),
+  turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY,
+}: {
+  api?: RoomApi
+  turnstileSiteKey?: string
+}) {
+  const challenge = useTurnstileChallenge(turnstileSiteKey)
   const {
     mode,
     setMode,
@@ -44,7 +58,7 @@ function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
     chooseOption,
     resolveTimeout,
     selfIsHost,
-  } = useRoomLobby(api)
+  } = useRoomLobby(api, challenge.requestToken)
   return (
     <main>
       <header className="site-header">
@@ -69,6 +83,25 @@ function App({ api = getDefaultRoomApi() }: { api?: RoomApi }) {
             ? 'Reconectando con la Sala…'
             : 'Conexión restablecida'}
         </p>
+      )}
+      {challenge.active && turnstileSiteKey && (
+        <div
+          className="turnstile-challenge"
+          role="group"
+          aria-label="Verificación de seguridad"
+        >
+          <p>Completa la verificación para entrar a la Sala.</p>
+          <Suspense fallback={<p>Cargando verificación…</p>}>
+            <Turnstile
+              siteKey={turnstileSiteKey}
+              options={{ action: 'anonymous_signin', language: 'es' }}
+              onSuccess={challenge.onSuccess}
+              onError={challenge.onFailure}
+              onTimeout={challenge.onFailure}
+              onUnsupported={challenge.onFailure}
+            />
+          </Suspense>
+        </div>
       )}
 
       {roomState && roomState.room.status !== 'waiting' ? (
