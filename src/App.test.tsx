@@ -5,6 +5,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import type { RoomApi, RoomState } from './lib/roomApi'
 
+vi.mock('@marsidev/react-turnstile', () => ({
+  Turnstile: ({
+    onSuccess,
+    onError,
+  }: {
+    onSuccess(token: string): void
+    onError(): void
+  }) => (
+    <>
+      <button type="button" onClick={() => onSuccess('fresh-widget-token')}>
+        Completar verificación
+      </button>
+      <button type="button" onClick={onError}>
+        Fallar verificación
+      </button>
+    </>
+  ),
+}))
+
 const waitingRoom: RoomState = {
   room: {
     id: 'room-1',
@@ -110,6 +129,75 @@ describe('lobby de Startup Race', () => {
     expect(
       await screen.findByRole('heading', { name: 'Partida iniciada' }),
     ).toBeInTheDocument()
+  })
+
+  it('solicita Turnstile antes de crear una identidad anónima', async () => {
+    const user = userEvent.setup()
+    const ensureIdentity = vi.fn(
+      async (requestCaptchaToken: () => Promise<string>) => {
+        expect(await requestCaptchaToken()).toBe('fresh-widget-token')
+      },
+    )
+    const api = roomApi({ ensureIdentity })
+    render(<App api={api} turnstileSiteKey="site-key" />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(api.createRoom).not.toHaveBeenCalled()
+    await user.click(
+      await screen.findByRole('button', { name: 'Completar verificación' }),
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(ensureIdentity).toHaveBeenCalledOnce()
+  })
+
+  it('impide crear la identidad si falta la clave pública de Turnstile', async () => {
+    const user = userEvent.setup()
+    const ensureIdentity = vi.fn(
+      async (requestCaptchaToken: () => Promise<string>) => {
+        await requestCaptchaToken()
+      },
+    )
+    const api = roomApi({ ensureIdentity })
+    render(<App api={api} turnstileSiteKey="" />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La conexión del juego no está configurada.',
+    )
+    expect(api.createRoom).not.toHaveBeenCalled()
+  })
+
+  it('permite reintentar con una verificación nueva después de un fallo', async () => {
+    const user = userEvent.setup()
+    const ensureIdentity = vi.fn(
+      async (requestCaptchaToken: () => Promise<string>) => {
+        await requestCaptchaToken()
+      },
+    )
+    const api = roomApi({ ensureIdentity })
+    render(<App api={api} turnstileSiteKey="site-key" />)
+    await user.click(screen.getByRole('button', { name: 'Crear una sala' }))
+    await user.type(screen.getByLabelText('Tu nombre'), 'Ana')
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Fallar verificación' }),
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No pudimos completar la verificación. Inténtalo de nuevo.',
+    )
+    expect(api.createRoom).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Crear sala' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Completar verificación' }),
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Sala ABC234' }),
+    ).toBeInTheDocument()
+    expect(ensureIdentity).toHaveBeenCalledTimes(2)
   })
 
   it('restaura el asiento de la misma identidad desde el código en la URL', async () => {

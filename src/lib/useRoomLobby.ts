@@ -38,6 +38,8 @@ function errorMessage(error: unknown): string {
     return 'Escribe un nombre de 1 a 24 caracteres.'
   if (detail.includes('configuration_unavailable'))
     return 'La conexión del juego no está configurada.'
+  if (detail.includes('captcha_unavailable') || /captcha/i.test(detail))
+    return 'No pudimos completar la verificación. Inténtalo de nuevo.'
   return 'No pudimos completar la acción. Inténtalo de nuevo.'
 }
 
@@ -57,7 +59,10 @@ function isNetworkFailure(error: unknown): boolean {
   )
 }
 
-export function useRoomLobby(api: RoomApi) {
+export function useRoomLobby(
+  api: RoomApi,
+  requestCaptchaToken: () => Promise<string>,
+) {
   const [mode, setMode] = useState<'home' | 'create' | 'join'>(() =>
     roomCodeFromUrl() ? 'join' : 'home',
   )
@@ -164,7 +169,7 @@ export function useRoomLobby(api: RoomApi) {
       clearTimeout(timer)
       inFlight = true
       try {
-        if (restoring) await api.ensureIdentity()
+        if (restoring) await api.ensureIdentity(requestCaptchaToken)
         const latest = await readRoom(roomCode)
         if (!cancelled) {
           showRoom(latest)
@@ -242,7 +247,13 @@ export function useRoomLobby(api: RoomApi) {
     }
     // Restart when the Sala changes status or code, not on each version update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, readRoom, roomState?.room.code, roomState?.room.status])
+  }, [
+    api,
+    readRoom,
+    requestCaptchaToken,
+    roomState?.room.code,
+    roomState?.room.status,
+  ])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -261,7 +272,7 @@ export function useRoomLobby(api: RoomApi) {
     setBusy(true)
     const requestKey = `${mode}:${normalizedCode}:${normalizedName}:${type}`
     try {
-      await api.ensureIdentity()
+      await api.ensureIdentity(requestCaptchaToken)
       const requestId = requestIdFor(requestKey)
       const next =
         mode === 'create'
