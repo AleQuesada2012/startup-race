@@ -50,7 +50,19 @@ Supabase stack.
 
 ## Deployment
 
-1. Create a Supabase project, enable anonymous sign-ins, and apply the migrations.
+1. Create a Supabase project and enable anonymous sign-ins under Authentication →
+   Sign In / Providers. From this checkout, apply the migrations to that project:
+
+   ```bash
+   ./node_modules/.bin/supabase login
+   ./node_modules/.bin/supabase link --project-ref <project-ref>
+   ./node_modules/.bin/supabase db push --dry-run
+   ./node_modules/.bin/supabase db push
+   ```
+
+   Review the dry run before pushing. The migrations include the canonical game
+   cards and board content; `seed.sql` is for local resets.
+
 2. Allow the deployment's exact hostname on the existing Turnstile widget. For
    local development, allow `localhost` and `127.0.0.1` if both are used.
 3. Import this repository into Vercel.
